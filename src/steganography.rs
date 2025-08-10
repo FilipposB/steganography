@@ -117,16 +117,15 @@ impl EncodingLimit {
     }
 }
 
-fn adjust_color(mut color: u8, value: bool) -> u8 {
+fn adjust_color(color: u8, value: bool) -> u8 {
     let is_even = color % 2 == 0;
-    if value && is_even {
-        color = color + 1;
-    }
-    else if !value && !is_even {
-        color = color - 1;
-    }
+    let adjust = if color == 255 { -1 } else { 1 };
 
-    color
+    if (value && is_even) || (!value && !is_even) {
+        (color as i8 + adjust) as u8
+    } else {
+        color
+    }
 }
 
 fn value_in_pixel(pixel: Rgba<u8>, color: u8) -> bool {
