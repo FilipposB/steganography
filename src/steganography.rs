@@ -1,10 +1,17 @@
+use std::path::Path;
 use clap::ValueEnum;
-use image::{GenericImageView, ImageReader, Rgba};
+use image::{GenericImageView, ImageBuffer, ImageReader, Pixel, Rgba};
 use rand::{Rng, SeedableRng};
 use crate::converter::{Converter, SimpleConverter};
 use sha2::{Sha256, Digest};
 use rand_chacha::ChaCha20Rng;
 use crate::steganography::EncodingLimit::U16;
+
+const COLOR_CHANNEL_COUNT: u8 = 4;
+
+const COLOR_CHANNELS: [u8; COLOR_CHANNEL_COUNT as usize] = [0, 1, 2, 3];
+
+const MAP_INTENSITY: u8 = 175;
 
 fn string_to_seed_32(s: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -15,7 +22,7 @@ fn string_to_seed_32(s: &str) -> [u8; 32] {
 
 struct Traverser {
     random: ChaCha20Rng,
-    area: Vec<usize>,
+    area: Vec<(usize, Vec<u8>)>,
     iteration: usize,
     dimensions: (u32, u32),
 }
@@ -31,11 +38,11 @@ impl Traverser {
 
         let seed = string_to_seed_32(key);
 
-
+        let color_vec = Vec::from(COLOR_CHANNELS);
 
         let mut area = Vec::with_capacity(dimensions.0 as usize * dimensions.1 as usize);
         for i in 0..(dimensions.0 * dimensions.1) {
-            area.push(i as usize);
+            area.push((i as usize, color_vec.clone()));
         }
 
         Traverser{
@@ -47,16 +54,33 @@ impl Traverser {
 
     }
 
-    pub fn next(&mut self) -> Option<(u32, u32)> {
+    pub fn next(&mut self) -> Option<(u32, u32, u8)> {
         if self.area.is_empty() {
             return None;
         }
 
         let index = self.random.random_range(0..self.area.len());
-        let value = self.area.remove(index) as u32;
+
+        let color_vertex = self.area.get_mut(index).unwrap();
+
+        let color;
+
+        if color_vertex.1.len() == 1 {
+            color = color_vertex.1.pop().unwrap();
+        }
+        else {
+            let color_index = self.random.random_range(0..color_vertex.1.len());
+            color = color_vertex.1.remove(color_index);
+        }
+
+        let value = color_vertex.0 as u32;
+
+        if color_vertex.1.len() == 0 {
+            self.area.remove(index);
+        }
 
         self.iteration += 1;
-        Some((value % self.dimensions.0, value / self.dimensions.0))
+        Some((value % self.dimensions.0, value / self.dimensions.0, color))
     }
 }
 
@@ -105,14 +129,12 @@ fn adjust_color(mut color: u8, value: bool) -> u8 {
     color
 }
 
-fn value_in_pixel(pixel: Rgba<u8>) -> bool {
-    let mut color = pixel[3];
+fn value_in_pixel(pixel: Rgba<u8>, color: u8) -> bool {
+    pixel[color.into()] % 2 != 0
+}
 
-    if pixel[3] == 0 {
-        color = pixel[0]
-    }
-
-    color % 2 != 0
+fn image_capacity(dimensions: (u32, u32)) -> u32 {
+    dimensions.0 * dimensions.1 * COLOR_CHANNEL_COUNT as u32
 }
 
 
@@ -131,11 +153,11 @@ impl Steganography {
         }
     }
 
-    pub fn encode(&self, filename: &str, value: &str, output: Option<String>, verbose: bool) {
+    pub fn encode(&self, filename: &str, value: &str, output: Option<String>, verbose: bool, map: bool) {
         let image = ImageReader::open(filename).unwrap().decode().unwrap();
         let dimensions = image.dimensions();
 
-        let image_len = dimensions.0 * dimensions.1;
+        let image_len = image_capacity(dimensions);
 
         if image_len == 0 {
             panic!("{}", format!("No image found at '{}'", filename));
@@ -166,19 +188,21 @@ impl Steganography {
 
         let mut rgba_image = image.to_rgba8();
 
+        let mut map_image: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(dimensions.0, dimensions.1, |_x, _y| Rgba([0, 0, 0, 255]));
 
         for value in value_binary {
             let pixel_pos = traverser.next().unwrap();
             let pixel = rgba_image.get_pixel(pixel_pos.0, pixel_pos.1).clone();
             let mut pixel = pixel;
-
-            if pixel[3] > 1 {
-                pixel[3] = adjust_color(pixel[3], value);
-            } else {
-                pixel[0] = adjust_color(pixel[0], value);
-            }
-
+            pixel[pixel_pos.2.into()] = adjust_color(pixel[0], value);
             rgba_image.put_pixel(pixel_pos.0, pixel_pos.1, pixel);
+            
+            if map {
+                let mut map_pixel = map_image.get_pixel(pixel_pos.0, pixel_pos.1).to_rgba();
+                map_pixel[pixel_pos.2.into()] = MAP_INTENSITY.abs_diff(map_pixel[pixel_pos.2.into()]);
+                map_image.put_pixel(pixel_pos.0, pixel_pos.1, map_pixel);
+            }
         }
 
         let output_file = output.unwrap_or("output.png".to_string());
@@ -196,16 +220,30 @@ impl Steganography {
                 self.encoding
             );
         }
+        
+        rgba_image.save(output_file.clone()).unwrap();
+        
+        if map {
+            let path = Path::new(&output_file);
+            let mut new_name = path.file_stem().unwrap().to_os_string();
+            new_name.push("_map");
 
-        rgba_image.save(output_file).unwrap();
+            if let Some(ext) = path.extension() {
+                new_name.push(".");
+                new_name.push(ext);
+            }
 
+            let new_path = path.with_file_name(new_name);
+            map_image.save(new_path).unwrap();
+        }
+    
     }
 
     pub fn decode(&self, filename: &str) -> Result<String, String> {
         let image = ImageReader::open(filename).unwrap().decode().unwrap();
         let dimensions = image.dimensions();
 
-        let image_len = dimensions.0 * dimensions.1;
+        let image_len = image_capacity(dimensions);
 
         if image_len == 0 {
             return Err(format!("No image found at '{}'", filename));
@@ -216,7 +254,7 @@ impl Steganography {
 
         for index in 0..self.encoding.bits() {
             let pixel_pos = traverser.next().unwrap();
-            let value = value_in_pixel(image.get_pixel(pixel_pos.0, pixel_pos.1));
+            let value = value_in_pixel(image.get_pixel(pixel_pos.0, pixel_pos.1), pixel_pos.2);
             if value {
                 bits_used +=  2usize.pow((self.encoding.bits() - index - 1) as u32);
             }
@@ -230,7 +268,7 @@ impl Steganography {
 
         for _ in 0..bits_used {
             let pixel_pos = traverser.next().unwrap();
-            let value = value_in_pixel(image.get_pixel(pixel_pos.0, pixel_pos.1));
+            let value = value_in_pixel(image.get_pixel(pixel_pos.0, pixel_pos.1), pixel_pos.2);
             decoded.push(value);
         }
 

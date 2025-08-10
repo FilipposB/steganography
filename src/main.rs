@@ -37,6 +37,9 @@ enum Commands {
         #[clap(short, long)]
         verbose: bool,
 
+        #[clap(short, long)]
+        map: bool,
+
     },
     /// Decode a file
     Decode {
@@ -57,9 +60,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Encode { key, file_name, value, output, limit, verbose } => {
+        Commands::Encode { key, file_name, value, output, limit, verbose , map} => {
             let steganography = Steganography::new(key.clone(), limit.clone());
-            steganography.encode(file_name, value, output.clone(), *verbose);
+            steganography.encode(file_name, value, output.clone(), *verbose, *map);
         }
         Commands::Decode { key, file_name, limit } => {
             let steganography = Steganography::new(key.clone(), limit.clone());
