@@ -119,10 +119,13 @@ impl EncodingLimit {
 
 fn adjust_color(color: u8, value: bool) -> u8 {
     let is_even = color % 2 == 0;
-    let adjust = if color == 255 { -1 } else { 1 };
 
     if (value && is_even) || (!value && !is_even) {
-        (color as i8 + adjust) as u8
+        if color == 255 {
+            color.saturating_sub(1)
+        } else {
+            color.saturating_add(1)
+        }
     } else {
         color
     }

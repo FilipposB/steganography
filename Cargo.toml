@@ -10,3 +10,5 @@ sha2 = "0.11.0-rc.0"
 rand_chacha = "0.9.0"
 clap = { version = "4.5.43", features = ["derive"] }
 anyhow = "1.0.98"
+base64 = "0.22.1"
+flate2 = "1.1.2"
