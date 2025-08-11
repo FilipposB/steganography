@@ -122,9 +122,9 @@ fn adjust_color(color: u8, value: bool) -> u8 {
 
     if (value && is_even) || (!value && !is_even) {
         if color == 255 {
-            color.saturating_sub(1)
+            color - 1
         } else {
-            color.saturating_add(1)
+            color + 1
         }
     } else {
         color
@@ -197,7 +197,7 @@ impl Steganography {
             let pixel_pos = traverser.next().unwrap();
             let pixel = rgba_image.get_pixel(pixel_pos.0, pixel_pos.1).clone();
             let mut pixel = pixel;
-            pixel[pixel_pos.2.into()] = adjust_color(pixel[0], value);
+            pixel[pixel_pos.2.into()] = adjust_color(pixel[pixel_pos.2.into()], value);
             rgba_image.put_pixel(pixel_pos.0, pixel_pos.1, pixel);
             
             if map {
