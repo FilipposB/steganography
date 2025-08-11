@@ -250,19 +250,20 @@ impl Steganography {
 
         let mut traverser = Traverser::new(dimensions, self.key.clone());
         let mut bits_used = 0usize;
+        let encoding_bits = self.encoding.bits();
 
-        for index in 0..self.encoding.bits() {
+        for index in 0..encoding_bits {
             let pixel_pos = traverser.next().unwrap();
-            let value = value_in_pixel(image.get_pixel(pixel_pos.0, pixel_pos.1), pixel_pos.2);
-            if value {
-                bits_used +=  2usize.pow((self.encoding.bits() - index - 1) as u32);
+            if value_in_pixel(image.get_pixel(pixel_pos.0, pixel_pos.1), pixel_pos.2) {
+                bits_used += 1 << (encoding_bits - index - 1);
             }
+
         }
 
-        if bits_used + self.encoding.bits() > image_len as usize {
+        if bits_used + encoding_bits > image_len as usize {
             return Err("Error decoding image".to_owned());
         }
-
+    
         let mut decoded = Vec::<bool>::with_capacity(bits_used);
 
         for _ in 0..bits_used {
