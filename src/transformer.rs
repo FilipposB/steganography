@@ -17,7 +17,7 @@ pub fn file_to_b64(file_path: &str) -> Result<String, Error> {
     Ok(b64)
 }
 
-pub fn b64_to_file(b64: &str, out_file_path: &str) -> Result<(), io::Error> {
+pub fn b64_to_file(b64: &str, out_file_path: &str) -> Result<(), Error> {
     let compressed_bytes = general_purpose::STANDARD
         .decode(b64)
         .map_err(|e| Error::new(io::ErrorKind::InvalidData, e))?;
