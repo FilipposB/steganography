@@ -1,110 +1,34 @@
 use std::path::Path;
 use clap::ValueEnum;
 use image::{GenericImageView, ImageBuffer, ImageReader, Pixel, Rgba};
-use rand::{Rng, SeedableRng};
 use crate::converter::{Converter, SimpleConverter};
-use sha2::{Sha256, Digest};
-use rand_chacha::ChaCha20Rng;
-use crate::steganography::EncodingLimit::U16;
-
-const COLOR_CHANNEL_COUNT: u8 = 4;
-
-const COLOR_CHANNELS: [u8; COLOR_CHANNEL_COUNT as usize] = [0, 1, 2, 3];
+use crate::steganography::EncodingLimit::B16;
+use crate::traverser::Traverser;
 
 const MAP_INTENSITY: u8 = 175;
 
-fn string_to_seed_32(s: &str) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
-    let result = hasher.finalize();
-    result.into()
-}
-
-struct Traverser {
-    random: ChaCha20Rng,
-    area: Vec<(usize, Vec<u8>)>,
-    iteration: usize,
-    dimensions: (u32, u32),
-}
-
-impl Traverser {
-
-    fn new(dimensions: (u32, u32), key: Option<String>) -> Traverser {
-
-        let key = match key {
-            None => {""}
-            Some(x) => &*{ x }
-        };
-
-        let seed = string_to_seed_32(key);
-
-        let color_vec = Vec::from(COLOR_CHANNELS);
-
-        let mut area = Vec::with_capacity(dimensions.0 as usize * dimensions.1 as usize);
-        for i in 0..(dimensions.0 * dimensions.1) {
-            area.push((i as usize, color_vec.clone()));
-        }
-
-        Traverser{
-            area,
-            random: ChaCha20Rng::from_seed(seed),
-            iteration: 0,
-            dimensions
-        }
-
-    }
-
-    pub fn next(&mut self) -> Option<(u32, u32, u8)> {
-        if self.area.is_empty() {
-            return None;
-        }
-
-        let index = self.random.random_range(0..self.area.len());
-
-        let color_vertex = self.area.get_mut(index).unwrap();
-
-        let color;
-
-        if color_vertex.1.len() == 1 {
-            color = color_vertex.1.pop().unwrap();
-        }
-        else {
-            let color_index = self.random.random_range(0..color_vertex.1.len());
-            color = color_vertex.1.remove(color_index);
-        }
-
-        let value = color_vertex.0 as u32;
-
-        if color_vertex.1.len() == 0 {
-            self.area.remove(index);
-        }
-
-        self.iteration += 1;
-        Some((value % self.dimensions.0, value / self.dimensions.0, color))
-    }
-}
-
 #[derive(ValueEnum, Clone, Debug)]
 pub(crate) enum EncodingLimit {
-    U8,
-    U16,
-    U32,
+    B8,
+    B16,
+    B32,
 }
+
 
 impl EncodingLimit {
     fn max(&self) -> usize {
         match self {
-            EncodingLimit::U8 => u8::MAX as usize,
-            U16 => u16::MAX as usize,
-            EncodingLimit::U32 => u32::MAX as usize,
+            EncodingLimit::B8 => u8::MAX as usize,
+            EncodingLimit::B16 => u16::MAX as usize,
+            EncodingLimit::B32 => u32::MAX as usize,
         }
     }
 
     fn bits(&self) -> usize {
         match self {
-            EncodingLimit::U8 => 8usize,
-            U16 => 16usize,
-            EncodingLimit::U32 => 32usize,
+            EncodingLimit::B8 => 8usize,
+            EncodingLimit::B16 => 16usize,
+            EncodingLimit::B32 => 32usize,
         }
     }
 
@@ -114,6 +38,28 @@ impl EncodingLimit {
             .rev()
             .map(|i| ((number >> i) & 1) == 1)
             .collect()
+    }
+}
+
+#[derive(ValueEnum, Clone, Debug)]
+pub(crate) enum ColorChannel {
+    RGB,
+    RGBA
+}
+
+impl ColorChannel {
+    fn get(&self) -> Vec<u8> {
+        match self {
+            ColorChannel::RGB => { vec![0, 1, 2] }
+            ColorChannel::RGBA => { vec![0, 1, 2, 3] }
+        }
+    }
+    
+    fn color_count(&self) -> u32 {
+        match self {
+            ColorChannel::RGB => {3}
+            ColorChannel::RGBA => {4}
+        }
     }
 }
 
@@ -135,8 +81,8 @@ fn value_in_pixel(pixel: Rgba<u8>, color: u8) -> bool {
     pixel[color.into()] % 2 != 0
 }
 
-fn image_capacity(dimensions: (u32, u32)) -> u32 {
-    dimensions.0 * dimensions.1 * COLOR_CHANNEL_COUNT as u32
+fn image_capacity(dimensions: (u32, u32), color_count: u32) -> u32 {
+    dimensions.0 * dimensions.1 * color_count
 }
 
 
@@ -144,14 +90,16 @@ pub struct Steganography {
     key: Option<String>,
     converter: Box<dyn Converter>,
     encoding: EncodingLimit,
+    color_channel: ColorChannel
 }
 
 impl Steganography {
-    pub fn new(key: Option<String>, encoding: Option<EncodingLimit>) -> Steganography {
+    pub fn new(key: Option<String>, encoding: Option<EncodingLimit>, color_channel: Option<ColorChannel>) -> Steganography {
         Steganography {
             key,
             converter: Box::new(SimpleConverter::new()),
-            encoding: encoding.unwrap_or(U16)
+            encoding: encoding.unwrap_or(B16),
+            color_channel: color_channel.unwrap_or(ColorChannel::RGBA)
         }
     }
 
@@ -159,7 +107,7 @@ impl Steganography {
         let image = ImageReader::open(filename).unwrap().decode().unwrap();
         let dimensions = image.dimensions();
 
-        let image_len = image_capacity(dimensions);
+        let image_len = image_capacity(dimensions, self.color_channel.color_count());
 
         if image_len == 0 {
             panic!("{}", format!("No image found at '{}'", filename));
@@ -186,7 +134,7 @@ impl Steganography {
                                  , value_size, image_len));
         }
 
-        let mut traverser = Traverser::new(dimensions, self.key.clone());
+        let mut traverser = Traverser::new((dimensions.0, dimensions.1, self.color_channel.get()), self.key.clone());
 
         let mut rgba_image = image.to_rgba8();
 
@@ -245,13 +193,13 @@ impl Steganography {
         let image = ImageReader::open(filename).unwrap().decode().unwrap();
         let dimensions = image.dimensions();
 
-        let image_len = image_capacity(dimensions);
+        let image_len = image_capacity(dimensions, self.color_channel.color_count());
 
         if image_len == 0 {
             return Err(format!("No image found at '{}'", filename));
         }
 
-        let mut traverser = Traverser::new(dimensions, self.key.clone());
+        let mut traverser = Traverser::new((dimensions.0, dimensions.1, self.color_channel.get()), self.key.clone());
         let mut bits_used = 0usize;
         let encoding_bits = self.encoding.bits();
 
